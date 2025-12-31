@@ -13,4 +13,4 @@ This Terraform configuration creates:
 - **Route Tables** (public and private)
 - **Route Table Associations** connecting subnets to route tables
 
-## Created Github Actions to check terraform code fromatting and validation ..
+## Created Github Actions to check terraform code fromatting and validation ...
