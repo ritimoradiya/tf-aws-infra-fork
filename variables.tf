@@ -15,12 +15,6 @@ variable "vpc_name" {
   type        = string
 }
 
-variable "availability_zones" {
-  description = "List of availability zones"
-  type        = list(string)
-  default     = ["us-east-1a", "us-east-1b", "us-east-1c"]
-}
-
 variable "aws_profile" {
   description = "AWS CLI profile to use"
   type        = string
@@ -42,4 +36,10 @@ variable "app_port" {
   description = "Application port"
   type        = number
   default     = 8080
+}
+
+variable "subnet_count" {
+  description = "Number of subnets to create (both public and private). If null, uses all available AZs"
+  type        = number
+  default     = null
 }
