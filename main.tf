@@ -188,13 +188,204 @@ resource "aws_security_group" "application" {
   })
 }
 
-# EC2 Instance
+#######################################
+# NEW RESOURCES FOR ASSIGNMENT 06
+#######################################
+
+# Database Security Group
+resource "aws_security_group" "database" {
+  name        = "${var.vpc_name}-database-sg"
+  description = "Security group for RDS database"
+  vpc_id      = aws_vpc.main.id
+
+  # Allow PostgreSQL traffic from application security group ONLY
+  ingress {
+    description     = "PostgreSQL from application"
+    from_port       = var.db_port
+    to_port         = var.db_port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.application.id]
+  }
+
+  # Allow all outbound traffic
+  egress {
+    description = "All outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "${var.vpc_name}-database-sg"
+  })
+}
+
+# RDS Subnet Group
+resource "aws_db_subnet_group" "main" {
+  name        = "${var.vpc_name}-db-subnet-group"
+  description = "Database subnet group for RDS"
+  subnet_ids  = aws_subnet.private[*].id
+
+  tags = merge(local.common_tags, {
+    Name = "${var.vpc_name}-db-subnet-group"
+  })
+}
+
+# RDS Parameter Group
+resource "aws_db_parameter_group" "main" {
+  name        = "${var.vpc_name}-db-parameter-group"
+  family      = var.db_parameter_family
+  description = "Custom parameter group for ${var.db_engine}"
+
+  tags = merge(local.common_tags, {
+    Name = "${var.vpc_name}-db-parameter-group"
+  })
+}
+
+# RDS Instance
+resource "aws_db_instance" "main" {
+  identifier     = "csye6225"
+  engine         = var.db_engine
+  engine_version = var.db_engine_version
+  instance_class = var.db_instance_class
+
+  allocated_storage = var.db_allocated_storage
+  storage_type      = "gp2"
+  storage_encrypted = true
+
+  db_name  = var.db_name
+  username = var.db_username
+  password = var.db_password
+  port     = var.db_port
+
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+  parameter_group_name   = aws_db_parameter_group.main.name
+  vpc_security_group_ids = [aws_security_group.database.id]
+
+  publicly_accessible = false
+  multi_az            = false
+
+  skip_final_snapshot = true
+
+  tags = merge(local.common_tags, {
+    Name = "csye6225-rds-instance"
+  })
+}
+
+# S3 Bucket for Image Storage
+resource "aws_s3_bucket" "images" {
+  bucket        = var.s3_bucket_name
+  force_destroy = true
+
+  tags = merge(local.common_tags, {
+    Name = "${var.vpc_name}-images-bucket"
+  })
+}
+
+# S3 Bucket Encryption
+resource "aws_s3_bucket_server_side_encryption_configuration" "images" {
+  bucket = aws_s3_bucket.images.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# S3 Bucket Public Access Block (Keep it Private)
+resource "aws_s3_bucket_public_access_block" "images" {
+  bucket = aws_s3_bucket.images.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# S3 Bucket Lifecycle Policy
+resource "aws_s3_bucket_lifecycle_configuration" "images" {
+  bucket = aws_s3_bucket.images.id
+
+  rule {
+    id     = "transition-to-ia"
+    status = "Enabled"
+
+    filter {}
+
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+  }
+}
+
+# IAM Role for EC2 Instance
+resource "aws_iam_role" "ec2_role" {
+  name = "${var.vpc_name}-ec2-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = merge(local.common_tags, {
+    Name = "${var.vpc_name}-ec2-role"
+  })
+}
+
+# IAM Policy for S3 Access
+resource "aws_iam_role_policy" "s3_policy" {
+  name = "${var.vpc_name}-s3-policy"
+  role = aws_iam_role.ec2_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:DeleteObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          aws_s3_bucket.images.arn,
+          "${aws_s3_bucket.images.arn}/*"
+        ]
+      }
+    ]
+  })
+}
+
+# IAM Instance Profile
+resource "aws_iam_instance_profile" "ec2_profile" {
+  name = "${var.vpc_name}-ec2-profile"
+  role = aws_iam_role.ec2_role.name
+
+  tags = merge(local.common_tags, {
+    Name = "${var.vpc_name}-ec2-profile"
+  })
+}
+
+# EC2 Instance with User Data
 resource "aws_instance" "webapp" {
   ami                    = var.ami_id
   instance_type          = var.instance_type
   subnet_id              = aws_subnet.public[0].id
   vpc_security_group_ids = [aws_security_group.application.id]
-  key_name               = var.ec2_key_name # ADDED THIS LINE
+  key_name               = var.ec2_key_name
+  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
 
   root_block_device {
     volume_size           = 25
@@ -204,7 +395,35 @@ resource "aws_instance" "webapp" {
 
   disable_api_termination = false
 
+  user_data = <<-EOF
+              #!/bin/bash
+              
+              # Update environment file with RDS connection details
+              cat > /opt/csye6225/webapp/.env << 'ENVFILE'
+              NODE_ENV=production
+              PORT=${var.app_port}
+              DB_HOST=${aws_db_instance.main.address}
+              DB_PORT=${var.db_port}
+              DB_USER=${var.db_username}
+              DB_PASSWORD=${var.db_password}
+              DB_NAME=${var.db_name}
+              S3_BUCKET_NAME=${var.s3_bucket_name}
+              AWS_REGION=${var.region}
+              ENVFILE
+              
+              # Set proper ownership
+              chown csye6225:csye6225 /opt/csye6225/webapp/.env
+              chmod 600 /opt/csye6225/webapp/.env
+              
+              # Restart application service
+              systemctl restart webapp.service
+              EOF
+
+  user_data_replace_on_change = true
+
   tags = merge(local.common_tags, {
     Name = "${var.vpc_name}-webapp-instance"
   })
+
+  depends_on = [aws_db_instance.main]
 }
