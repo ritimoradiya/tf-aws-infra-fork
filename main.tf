@@ -399,7 +399,7 @@ resource "aws_instance" "webapp" {
               #!/bin/bash
               
               # Update environment file with RDS connection details
-              cat > /opt/csye6225/webapp/.env << 'ENVFILE'
+              cat > /opt/webapp/.env << 'ENVFILE'
               NODE_ENV=production
               PORT=${var.app_port}
               DB_HOST=${aws_db_instance.main.address}
@@ -412,8 +412,8 @@ resource "aws_instance" "webapp" {
               ENVFILE
               
               # Set proper ownership
-              chown csye6225:csye6225 /opt/csye6225/webapp/.env
-              chmod 600 /opt/csye6225/webapp/.env
+              chown csye6225:csye6225 /opt/webapp/.env
+              chmod 600 /opt/webapp/.env
               
               # Restart application service
               systemctl restart webapp.service
