@@ -438,6 +438,13 @@ resource "aws_instance" "webapp" {
               chown csye6225:csye6225 /opt/webapp/.env
               chmod 600 /opt/webapp/.env
               
+              # Configure and start CloudWatch Agent
+              /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+                -a fetch-config \
+                -m ec2 \
+                -s \
+                -c file:/opt/aws/amazon-cloudwatch-agent/etc/cloudwatch-config.json
+              
               # Restart application service
               systemctl restart webapp.service
               EOF
