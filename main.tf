@@ -4,6 +4,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
 }
 
@@ -192,6 +196,9 @@ resource "aws_security_group" "application" {
 # NEW RESOURCES FOR ASSIGNMENT 06
 #######################################
 
+# Random UUID for S3 Bucket Name (Globally Unique)
+resource "random_uuid" "s3_bucket" {}
+
 # Database Security Group
 resource "aws_security_group" "database" {
   name        = "${var.vpc_name}-database-sg"
@@ -273,13 +280,15 @@ resource "aws_db_instance" "main" {
   })
 }
 
-# S3 Bucket for Image Storage
+# S3 Bucket for Image Storage (Using UUID)
 resource "aws_s3_bucket" "images" {
-  bucket        = var.s3_bucket_name
+  bucket        = random_uuid.s3_bucket.result
   force_destroy = true
 
   tags = merge(local.common_tags, {
-    Name = "${var.vpc_name}-images-bucket"
+    Name    = "${var.vpc_name}-images-${random_uuid.s3_bucket.result}"
+    Type    = "s3-bucket"
+    Purpose = "image-storage"
   })
 }
 
@@ -407,7 +416,7 @@ resource "aws_instance" "webapp" {
               DB_USER=${var.db_username}
               DB_PASSWORD=${var.db_password}
               DB_NAME=${var.db_name}
-              S3_BUCKET_NAME=${var.s3_bucket_name}
+              S3_BUCKET_NAME=${random_uuid.s3_bucket.result}
               AWS_REGION=${var.region}
               ENVFILE
               

@@ -103,9 +103,3 @@ variable "db_parameter_family" {
   type        = string
   default     = "postgres14"
 }
-
-# S3 Variables
-variable "s3_bucket_name" {
-  description = "Name for the S3 bucket (must be globally unique)"
-  type        = string
-}
