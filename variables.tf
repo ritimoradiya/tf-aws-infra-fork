@@ -103,3 +103,86 @@ variable "db_parameter_family" {
   type        = string
   default     = "postgres14"
 }
+
+#######################################
+# NEW VARIABLES FOR ASSIGNMENT 08
+#######################################
+
+variable "domain_name" {
+  description = "Root domain name (e.g., ritimoradiya.me)"
+  type        = string
+}
+
+variable "subdomain" {
+  description = "Subdomain prefix (e.g., dev or demo)"
+  type        = string
+}
+
+# Auto Scaling Group Variables
+variable "asg_min_size" {
+  description = "Minimum number of instances in ASG"
+  type        = number
+  default     = 3
+}
+
+variable "asg_max_size" {
+  description = "Maximum number of instances in ASG"
+  type        = number
+  default     = 5
+}
+
+variable "asg_desired_capacity" {
+  description = "Desired number of instances in ASG"
+  type        = number
+  default     = 1
+}
+
+variable "asg_cooldown" {
+  description = "Cooldown period for ASG in seconds"
+  type        = number
+  default     = 60
+}
+
+# Auto Scaling Policy Variables
+variable "scale_up_cpu_threshold" {
+  description = "CPU threshold percentage to trigger scale up"
+  type        = number
+  default     = 5
+}
+
+variable "scale_down_cpu_threshold" {
+  description = "CPU threshold percentage to trigger scale down"
+  type        = number
+  default     = 3
+}
+
+# Health Check Variables
+variable "health_check_path" {
+  description = "Path for ALB health check"
+  type        = string
+  default     = "/healthz"
+}
+
+variable "health_check_interval" {
+  description = "Health check interval in seconds"
+  type        = number
+  default     = 30
+}
+
+variable "health_check_timeout" {
+  description = "Health check timeout in seconds"
+  type        = number
+  default     = 5
+}
+
+variable "health_check_healthy_threshold" {
+  description = "Number of consecutive health checks successes required"
+  type        = number
+  default     = 2
+}
+
+variable "health_check_unhealthy_threshold" {
+  description = "Number of consecutive health check failures required"
+  type        = number
+  default     = 2
+}

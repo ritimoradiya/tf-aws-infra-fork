@@ -136,13 +136,55 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private.id
 }
 
-# Application Security Group
+#######################################
+# SECURITY GROUPS
+#######################################
+
+# Load Balancer Security Group (NEW FOR ASSIGNMENT 08)
+resource "aws_security_group" "load_balancer" {
+  name        = "${var.vpc_name}-load-balancer-sg"
+  description = "Security group for Application Load Balancer"
+  vpc_id      = aws_vpc.main.id
+
+  # Allow HTTP from anywhere
+  ingress {
+    description = "HTTP from Internet"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Allow HTTPS from anywhere
+  ingress {
+    description = "HTTPS from Internet"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Allow all outbound traffic
+  egress {
+    description = "All outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "${var.vpc_name}-load-balancer-sg"
+  })
+}
+
+# Application Security Group (UPDATED FOR ASSIGNMENT 08)
 resource "aws_security_group" "application" {
   name        = "${var.vpc_name}-application-sg"
   description = "Security group for web application"
   vpc_id      = aws_vpc.main.id
 
-  # SSH access
+  # SSH access from anywhere (for debugging)
   ingress {
     description = "SSH"
     from_port   = 22
@@ -151,31 +193,13 @@ resource "aws_security_group" "application" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # HTTP access
+  # Application port - ONLY from Load Balancer Security Group
   ingress {
-    description = "HTTP"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # HTTPS access
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Application port
-  ingress {
-    description = "Application"
-    from_port   = var.app_port
-    to_port     = var.app_port
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    description     = "Application from Load Balancer"
+    from_port       = var.app_port
+    to_port         = var.app_port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.load_balancer.id]
   }
 
   # Allow all outbound traffic
@@ -191,13 +215,6 @@ resource "aws_security_group" "application" {
     Name = "${var.vpc_name}-application-sg"
   })
 }
-
-#######################################
-# NEW RESOURCES FOR ASSIGNMENT 06
-#######################################
-
-# Random UUID for S3 Bucket Name (Globally Unique)
-resource "random_uuid" "s3_bucket" {}
 
 # Database Security Group
 resource "aws_security_group" "database" {
@@ -227,6 +244,13 @@ resource "aws_security_group" "database" {
     Name = "${var.vpc_name}-database-sg"
   })
 }
+
+#######################################
+# RDS RESOURCES
+#######################################
+
+# Random UUID for S3 Bucket Name (Globally Unique)
+resource "random_uuid" "s3_bucket" {}
 
 # RDS Subnet Group
 resource "aws_db_subnet_group" "main" {
@@ -280,6 +304,10 @@ resource "aws_db_instance" "main" {
   })
 }
 
+#######################################
+# S3 RESOURCES
+#######################################
+
 # S3 Bucket for Image Storage (Using UUID)
 resource "aws_s3_bucket" "images" {
   bucket        = random_uuid.s3_bucket.result
@@ -330,6 +358,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "images" {
   }
 }
 
+#######################################
+# IAM RESOURCES
+#######################################
+
 # IAM Role for EC2 Instance
 resource "aws_iam_role" "ec2_role" {
   name = "${var.vpc_name}-ec2-role"
@@ -377,19 +409,11 @@ resource "aws_iam_role_policy" "s3_policy" {
   })
 }
 
-#######################################
-# NEW FOR ASSIGNMENT 07: CloudWatch IAM Policy
-#######################################
-
 # Attach CloudWatch Agent Policy to EC2 Role
 resource "aws_iam_role_policy_attachment" "cloudwatch_agent_policy" {
   role       = aws_iam_role.ec2_role.name
   policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
 }
-
-#######################################
-# END OF NEW ASSIGNMENT 07 CODE
-#######################################
 
 # IAM Instance Profile
 resource "aws_iam_instance_profile" "ec2_profile" {
@@ -401,24 +425,41 @@ resource "aws_iam_instance_profile" "ec2_profile" {
   })
 }
 
-# EC2 Instance with User Data
-resource "aws_instance" "webapp" {
-  ami                    = var.ami_id
-  instance_type          = var.instance_type
-  subnet_id              = aws_subnet.public[0].id
-  vpc_security_group_ids = [aws_security_group.application.id]
-  key_name               = var.ec2_key_name
-  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
+#######################################
+# ASSIGNMENT 08: AUTO SCALING & LOAD BALANCER
+#######################################
 
-  root_block_device {
-    volume_size           = 25
-    volume_type           = "gp2"
-    delete_on_termination = true
+# Launch Template (Replaces standalone EC2 instance)
+resource "aws_launch_template" "webapp" {
+  name          = "${var.vpc_name}-launch-template"
+  description   = "Launch template for webapp Auto Scaling Group"
+  image_id      = var.ami_id
+  instance_type = var.instance_type
+  key_name      = var.ec2_key_name
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.ec2_profile.name
   }
 
-  disable_api_termination = false
+  vpc_security_group_ids = [aws_security_group.application.id]
 
-  user_data = <<-EOF
+  block_device_mappings {
+    device_name = "/dev/sda1"
+
+    ebs {
+      volume_size           = 25
+      volume_type           = "gp2"
+      delete_on_termination = true
+      encrypted             = false
+    }
+  }
+
+  network_interfaces {
+    associate_public_ip_address = true
+    security_groups             = [aws_security_group.application.id]
+  }
+
+  user_data = base64encode(<<-EOF
               #!/bin/bash
               
               # Update environment file with RDS connection details
@@ -448,12 +489,203 @@ resource "aws_instance" "webapp" {
               # Restart application service
               systemctl restart webapp.service
               EOF
+  )
 
-  user_data_replace_on_change = true
+  tag_specifications {
+    resource_type = "instance"
+    tags = merge(local.common_tags, {
+      Name = "${var.vpc_name}-webapp-instance"
+    })
+  }
 
   tags = merge(local.common_tags, {
-    Name = "${var.vpc_name}-webapp-instance"
+    Name = "${var.vpc_name}-launch-template"
   })
+}
 
-  depends_on = [aws_db_instance.main]
+# Target Group for Load Balancer
+resource "aws_lb_target_group" "webapp" {
+  name     = "${var.vpc_name}-tg"
+  port     = var.app_port
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.main.id
+
+  health_check {
+    enabled             = true
+    path                = var.health_check_path
+    protocol            = "HTTP"
+    port                = "traffic-port"
+    interval            = var.health_check_interval
+    timeout             = var.health_check_timeout
+    healthy_threshold   = var.health_check_healthy_threshold
+    unhealthy_threshold = var.health_check_unhealthy_threshold
+    matcher             = "200"
+  }
+
+  deregistration_delay = 30
+
+  tags = merge(local.common_tags, {
+    Name = "${var.vpc_name}-target-group"
+  })
+}
+
+# Application Load Balancer
+resource "aws_lb" "webapp" {
+  name               = "${var.vpc_name}-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.load_balancer.id]
+  subnets            = aws_subnet.public[*].id
+
+  enable_deletion_protection = false
+  enable_http2               = true
+
+  tags = merge(local.common_tags, {
+    Name = "${var.vpc_name}-alb"
+  })
+}
+
+# ALB Listener (HTTP on port 80)
+resource "aws_lb_listener" "webapp_http" {
+  load_balancer_arn = aws_lb.webapp.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.webapp.arn
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "${var.vpc_name}-listener-http"
+  })
+}
+
+# Auto Scaling Group
+resource "aws_autoscaling_group" "webapp" {
+  name                      = "${var.vpc_name}-asg"
+  min_size                  = var.asg_min_size
+  max_size                  = var.asg_max_size
+  desired_capacity          = var.asg_desired_capacity
+  default_cooldown          = var.asg_cooldown
+  vpc_zone_identifier       = aws_subnet.public[*].id
+  target_group_arns         = [aws_lb_target_group.webapp.arn]
+  health_check_type         = "ELB"
+  health_check_grace_period = 300
+
+  launch_template {
+    id      = aws_launch_template.webapp.id
+    version = "$Latest"
+  }
+
+  tag {
+    key                 = "Name"
+    value               = "${var.vpc_name}-webapp-asg-instance"
+    propagate_at_launch = true
+  }
+
+  tag {
+    key                 = "Environment"
+    value               = "dev"
+    propagate_at_launch = true
+  }
+
+  tag {
+    key                 = "ManagedBy"
+    value               = "Terraform"
+    propagate_at_launch = true
+  }
+
+  tag {
+    key                 = "Project"
+    value               = "CSYE6225"
+    propagate_at_launch = true
+  }
+}
+
+# Scale Up Policy
+resource "aws_autoscaling_policy" "scale_up" {
+  name                   = "${var.vpc_name}-scale-up-policy"
+  autoscaling_group_name = aws_autoscaling_group.webapp.name
+  adjustment_type        = "ChangeInCapacity"
+  scaling_adjustment     = 1
+  cooldown               = var.asg_cooldown
+  policy_type            = "SimpleScaling"
+}
+
+# Scale Down Policy
+resource "aws_autoscaling_policy" "scale_down" {
+  name                   = "${var.vpc_name}-scale-down-policy"
+  autoscaling_group_name = aws_autoscaling_group.webapp.name
+  adjustment_type        = "ChangeInCapacity"
+  scaling_adjustment     = -1
+  cooldown               = var.asg_cooldown
+  policy_type            = "SimpleScaling"
+}
+
+# CloudWatch Alarm - Scale Up (CPU > 5%)
+resource "aws_cloudwatch_metric_alarm" "cpu_high" {
+  alarm_name          = "${var.vpc_name}-high-cpu-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = 60
+  statistic           = "Average"
+  threshold           = var.scale_up_cpu_threshold
+  alarm_description   = "This metric monitors high CPU utilization"
+  alarm_actions       = [aws_autoscaling_policy.scale_up.arn]
+
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.webapp.name
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "${var.vpc_name}-high-cpu-alarm"
+  })
+}
+
+# CloudWatch Alarm - Scale Down (CPU < 3%)
+resource "aws_cloudwatch_metric_alarm" "cpu_low" {
+  alarm_name          = "${var.vpc_name}-low-cpu-alarm"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = 60
+  statistic           = "Average"
+  threshold           = var.scale_down_cpu_threshold
+  alarm_description   = "This metric monitors low CPU utilization"
+  alarm_actions       = [aws_autoscaling_policy.scale_down.arn]
+
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.webapp.name
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "${var.vpc_name}-low-cpu-alarm"
+  })
+}
+
+#######################################
+# ROUTE53 DNS CONFIGURATION
+#######################################
+
+# Data source to get the hosted zone for subdomain
+data "aws_route53_zone" "subdomain" {
+  name         = "${var.subdomain}.${var.domain_name}"
+  private_zone = false
+}
+
+# A Record pointing to Load Balancer
+resource "aws_route53_record" "webapp" {
+  zone_id = data.aws_route53_zone.subdomain.zone_id
+  name    = "${var.subdomain}.${var.domain_name}"
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.webapp.dns_name
+    zone_id                = aws_lb.webapp.zone_id
+    evaluate_target_health = true
+  }
 }
