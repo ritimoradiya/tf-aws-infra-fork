@@ -33,6 +33,16 @@ locals {
   # Calculate subnet bits for CIDR
   subnet_bits = ceil(log(local.actual_subnet_count * 2, 2))
 
+  # Get unique public subnets (one per AZ) for Load Balancer
+  # ALB requires at least 2 AZs and can't have multiple subnets in same AZ
+  unique_public_subnets = [
+    for idx, subnet in aws_subnet.public : subnet.id
+    if index(
+      [for s in aws_subnet.public : s.availability_zone],
+      subnet.availability_zone
+    ) == idx
+  ]
+
   # Common tags
   common_tags = {
     Environment = "dev"
@@ -441,8 +451,6 @@ resource "aws_launch_template" "webapp" {
     name = aws_iam_instance_profile.ec2_profile.name
   }
 
-  vpc_security_group_ids = [aws_security_group.application.id]
-
   block_device_mappings {
     device_name = "/dev/sda1"
 
@@ -457,6 +465,7 @@ resource "aws_launch_template" "webapp" {
   network_interfaces {
     associate_public_ip_address = true
     security_groups             = [aws_security_group.application.id]
+    delete_on_termination       = true
   }
 
   user_data = base64encode(<<-EOF
@@ -535,7 +544,7 @@ resource "aws_lb" "webapp" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.load_balancer.id]
-  subnets            = aws_subnet.public[*].id
+  subnets            = local.unique_public_subnets
 
   enable_deletion_protection = false
   enable_http2               = true
