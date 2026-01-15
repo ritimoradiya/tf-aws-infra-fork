@@ -39,7 +39,6 @@ This Terraform configuration deploys a **complete three-tier, highly available w
 - [CI/CD Integration](#cicd-integration)
 - [Multi-Environment Setup](#multi-environment-setup)
 - [Troubleshooting](#troubleshooting)
-- [Cost Optimization](#cost-optimization)
 
 ---
 
